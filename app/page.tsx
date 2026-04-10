@@ -1,21 +1,7 @@
-// =============================
-// PLANORA FRONTEND (GITHUB READY)
-// Next.js + Tailwind + shadcn/ui
-// =============================
-
-// 1. INSTALL INSTRUCTIONS
-// ----------------------
-// npx create-next-app@latest planora
-// cd planora
-// npm install
-// npx shadcn-ui@latest init
-// npx shadcn-ui@latest add button card input textarea
-
-// 2. REPLACE /app/page.tsx WITH THIS FILE
-
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import jsPDF from "jspdf";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -24,99 +10,178 @@ import { Textarea } from "@/components/ui/textarea";
 export default function PlanoraApp() {
   const [location, setLocation] = useState("");
   const [preferences, setPreferences] = useState("");
-  const [email, setEmail] = useState("");
-  const [mode, setMode] = useState("premium");
-  const [plan, setPlan] = useState<any>(null);
   const [preview, setPreview] = useState<any>(null);
+  const [images, setImages] = useState<any>({});
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
 
-  const handleCheckout = async () => {
+  const isPaid =
+    typeof window !== "undefined" &&
+    window.location.search.includes("success");
+
+  // IMAGE FETCH (SAFE)
+  const getImage = async (query: string) => {
     try {
-      const res = await fetch("/api/checkout", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ location, preferences, mode, email })
-      });
-
+      const res = await fetch(
+        `https://api.unsplash.com/photos/random?query=${encodeURIComponent(
+          query
+        )}&client_id=${process.env.NEXT_PUBLIC_UNSPLASH_KEY}`
+      );
       const data = await res.json();
-      window.location.href = data.url;
+      return data?.urls?.regular || "https://picsum.photos/600/400";
     } catch {
-      setError("Payment failed. Try again.");
+      return "https://picsum.photos/600/400";
     }
   };
 
+  // PREVIEW (FREE)
   const generatePreview = async () => {
-    if (!location) {
-      setError("Please enter a destination");
-      return;
+    if (!location) return;
+
+    setLoading(true);
+
+    const items = [
+      {
+        name: "Luxury Hotel Check-in",
+        description: "Arrive and unwind in a premium hotel experience.",
+      },
+      {
+        name: "Explore Iconic Landmarks",
+        description: "Visit must-see attractions and hidden gems.",
+      },
+      {
+        name: "Fine Dining Experience",
+        description: "Enjoy a top-rated restaurant curated for you.",
+      },
+      {
+        name: "Private Guided Tour",
+        description: "Exclusive guided experience with a local expert.",
+      },
+    ];
+
+    setPreview({ days: [items] });
+
+    const newImages: any = {};
+    for (const item of items) {
+      newImages[item.name] = await getImage(item.name + " " + location);
     }
 
-    setError("");
+    setImages(newImages);
+    setLoading(false);
+  };
+
+  // FULL AI PLAN
+  const generateFullPlan = async () => {
     setLoading(true);
 
     try {
       const res = await fetch("/api/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ location, preferences, mode })
+        body: JSON.stringify({ location, preferences }),
       });
 
       const data = await res.json();
+      setPreview(data);
 
-      setPreview({ days: [data.days?.[0] || []] });
-      setPlan(data);
+      const newImages: any = {};
+      for (const day of data.days) {
+        for (const item of day) {
+          newImages[item.name] = await getImage(
+            item.name + " " + location
+          );
+        }
+      }
+
+      setImages(newImages);
     } catch {
-      setError("Failed to generate trip");
+      alert("AI failed — try again");
     }
 
     setLoading(false);
   };
 
-  const shareTrip = async () => {
-    const text = `This planned my entire ${location} trip better than Google ✈️`;
+  // STRIPE CHECKOUT
+  const handleCheckout = async () => {
+    const res = await fetch("/api/checkout", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ location, preferences }),
+    });
 
-    if (navigator.share) {
-      await navigator.share({ title: "Planora", text, url: window.location.href });
-    } else {
-      await navigator.clipboard.writeText(text + " " + window.location.href);
-      alert("Copied! Share it ✈️");
+    const data = await res.json();
+    window.location.href = data.url;
+  };
+
+  // AUTO UNLOCK
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const success = params.get("success");
+    const loc = params.get("location");
+    const prefs = params.get("preferences");
+
+    if (success) {
+      if (loc) setLocation(loc);
+      if (prefs) setPreferences(prefs);
+      generateFullPlan();
     }
+  }, []);
+
+  // PDF EXPORT
+  const downloadPDF = () => {
+    if (!preview) return;
+
+    const doc = new jsPDF();
+    let y = 20;
+
+    doc.setFontSize(22);
+    doc.text("Planora Luxury Itinerary", 20, y);
+    y += 10;
+
+    preview.days.forEach((day: any[], i: number) => {
+      doc.setFontSize(16);
+      doc.text(`Day ${i + 1}`, 20, y);
+      y += 8;
+
+      day.forEach((item: any) => {
+        doc.setFontSize(12);
+        doc.text(`• ${item.name}`, 20, y);
+        y += 6;
+
+        doc.setTextColor(100);
+        doc.text(item.description, 25, y);
+        y += 8;
+
+        doc.setTextColor(0);
+      });
+
+      y += 5;
+    });
+
+    doc.save("planora-itinerary.pdf");
   };
 
   return (
-    <div className="min-h-screen bg-black text-white p-6 flex flex-col items-center">
+    <div className="min-h-screen bg-gradient-to-b from-black via-zinc-900 to-black text-white p-6 flex flex-col items-center">
 
       {/* HERO */}
-      <div className="text-center mb-10 max-w-2xl">
-        <h1 className="text-5xl font-serif tracking-wide">Planora</h1>
-
-        <p className="text-gray-400 mt-3 text-lg">
-          Effortless travel, perfectly planned.
+      <div className="text-center mb-12 max-w-2xl">
+        <h1 className="text-6xl font-serif tracking-wide">Planora</h1>
+        <p className="text-gray-400 mt-4 text-lg">
+          Luxury travel, intelligently designed.
         </p>
-
         <p className="text-gray-500 mt-2 text-sm">
-          Get a complete itinerary with hotels, dining, and experiences — in seconds.
+          AI-crafted itineraries with hotels, dining, and unforgettable experiences.
         </p>
-
-        <p className="text-green-400 text-xs mt-3">⭐ Trusted by travelers worldwide</p>
       </div>
 
       {/* FORM */}
-      <Card className="w-full max-w-xl p-6 bg-white/5 border border-white/10 rounded-2xl backdrop-blur-xl">
+      <Card className="w-full max-w-xl p-6 bg-white/5 border border-white/10 rounded-2xl backdrop-blur-xl shadow-2xl">
         <CardContent className="flex flex-col gap-4">
 
           <Input
-            placeholder="Destination (e.g. Paris, Tokyo...)"
+            placeholder="Destination (Paris, Tokyo, Dubai...)"
             value={location}
             onChange={(e) => setLocation(e.target.value)}
-            className="bg-white/10 border-none"
-          />
-
-          <Input
-            placeholder="Email (optional)"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
             className="bg-white/10 border-none"
           />
 
@@ -127,73 +192,90 @@ export default function PlanoraApp() {
             className="bg-white/10 border-none"
           />
 
-          <div className="flex gap-2">
-            {["standard", "premium ⭐", "luxury"].map((m) => (
-              <Button
-                key={m}
-                onClick={() => setMode(m)}
-                className={mode === m ? "bg-white text-black" : "bg-white/10"}
-              >
-                {m}
-              </Button>
-            ))}
-          </div>
-
-          <Button onClick={generatePreview} className="bg-white text-black text-lg">
+          <Button
+            onClick={generatePreview}
+            className="bg-white text-black text-lg rounded-xl"
+          >
             Design My Trip
           </Button>
 
           {loading && (
-            <p className="text-center text-gray-400 text-sm">Designing your itinerary ✨</p>
+            <p className="text-center text-gray-400 text-sm">
+              Designing your itinerary ✨
+            </p>
           )}
-
-          {error && (
-            <p className="text-center text-red-400 text-sm">{error}</p>
-          )}
-
         </CardContent>
       </Card>
 
-      {/* PREVIEW */}
+      {/* RESULTS */}
       {preview && (
-        <div className="mt-12 w-full max-w-3xl">
+        <div className="mt-14 w-full max-w-4xl">
 
-          <h2 className="text-xl mb-4 text-center">Preview Experience</h2>
+          <h2 className="text-2xl mb-6 text-center">
+            {isPaid ? "Your Luxury Itinerary" : "Preview Experience"}
+          </h2>
 
           {preview.days.map((day: any[], index: number) => (
-            <Card key={index} className="bg-white/5 mb-4">
-              <CardContent>
-                {day.map((item: any, i: number) => (
-                  <div
-                    key={i}
-                    className={`mb-3 ${i >= 2 ? "blur-sm opacity-60" : ""}`}
-                  >
-                    <p className="font-semibold">{item.name}</p>
-                    <p className="text-gray-400 text-sm">{item.description}</p>
-                  </div>
-                ))}
-              </CardContent>
-            </Card>
+            <div key={index} className="grid md:grid-cols-2 gap-6">
+              {day.map((item: any, i: number) => (
+                <Card
+                  key={i}
+                  className="bg-white/5 border border-white/10 rounded-2xl overflow-hidden"
+                >
+                  <img
+                    src={images[item.name] || "https://picsum.photos/600/400"}
+                    alt={item.name}
+                    className={`w-full h-48 object-cover ${
+                      !isPaid && i >= 2 ? "blur-sm opacity-70" : ""
+                    }`}
+                  />
+
+                  <CardContent className="p-4">
+                    <p className="font-semibold text-lg">{item.name}</p>
+                    <p className="text-gray-400 text-sm">
+                      {item.description}
+                    </p>
+
+                    {!isPaid && i >= 2 && (
+                      <p className="text-yellow-400 text-xs mt-2">
+                        🔒 Unlock full itinerary
+                      </p>
+                    )}
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
           ))}
 
-          <div className="text-center mt-6">
-            <Button onClick={handleCheckout} className="bg-white text-black text-lg px-6 py-3">
-              Unlock Full Plan ($9)
-            </Button>
-          </div>
+          {/* PAY BUTTON */}
+          {!isPaid && (
+            <div className="text-center mt-12">
+              <Button
+                onClick={handleCheckout}
+                className="bg-white text-black text-lg px-10 py-4 rounded-xl shadow-xl"
+              >
+                Unlock Full Luxury Plan ($9)
+              </Button>
+              <p className="text-gray-500 text-sm mt-3">
+                Full itinerary • Premium experiences • Instant access
+              </p>
+            </div>
+          )}
+
+          {/* PDF BUTTON */}
+          {isPaid && (
+            <div className="text-center mt-12">
+              <Button
+                onClick={downloadPDF}
+                className="bg-white text-black px-6 py-3 rounded-xl"
+              >
+                Download Your Luxury PDF
+              </Button>
+            </div>
+          )}
+
         </div>
       )}
-
-      {/* SHARE */}
-      {plan && (
-        <div className="mt-10 text-center">
-          <Button onClick={shareTrip} className="bg-white text-black">
-            Share My Trip
-          </Button>
-        </div>
-      )}
-
     </div>
   );
 }
-
